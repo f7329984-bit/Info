@@ -1,448 +1,401 @@
-import logging
-import platform
-import sys
-import time
-import sqlite3
 import os
-import json
-import requests
 import random
 import string
+import requests
+import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.constants import ParseMode
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging
+logging.basicConfig(level=logging.INFO)
 
-# Bot token - Environment variable se le rahe hain
+# Bot token
 TOKEN = os.environ.get("BOT_TOKEN", "")
+PORT = int(os.environ.get("PORT", 8080))
 
-# Check if token is set
 if not TOKEN:
-    print("❌ ERROR: BOT_TOKEN environment variable not set!")
-    print("Please set your bot token in Render environment variables")
-    sys.exit(1)
+    print("❌ BOT_TOKEN not set!")
+    exit(1)
 
-# Bot start time
-BOT_START_TIME = time.time()
+# Database (file-based)
+import sqlite3
 
-# Database setup
-def init_database():
-    try:
-        conn = sqlite3.connect('bot_data.db')
-        c = conn.cursor()
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            last_name TEXT,
-            first_seen TIMESTAMP,
-            last_seen TIMESTAMP,
-            commands_used INTEGER DEFAULT 0
-        )''')
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS groups (
-            chat_id INTEGER PRIMARY KEY,
-            chat_title TEXT,
-            chat_type TEXT,
-            first_seen TIMESTAMP,
-            last_activity TIMESTAMP
-        )''')
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS command_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            command TEXT,
-            timestamp TIMESTAMP,
-            chat_id INTEGER
-        )''')
-        
-        conn.commit()
-        conn.close()
-        print("✅ Database initialized successfully")
-    except Exception as e:
-        print(f"⚠️ Database error: {e}")
+def init_db():
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, last_seen TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS group_admins 
+                 (group_id INTEGER, admin_id INTEGER, PRIMARY KEY (group_id, admin_id))''')
+    conn.commit()
+    conn.close()
 
-# Track user activity
-async def track_user_activity(update, user_id, username, first_name, last_name, chat_id, command):
-    try:
-        conn = sqlite3.connect('bot_data.db')
-        c = conn.cursor()
-        
-        c.execute('''INSERT OR REPLACE INTO users 
-            (user_id, username, first_name, last_name, last_seen, commands_used) 
-            VALUES (?, ?, ?, ?, ?, COALESCE((SELECT commands_used FROM users WHERE user_id=?), 0) + 1)''',
-            (user_id, username or '', first_name or '', last_name or '', datetime.now(), user_id))
-        
-        c.execute('''INSERT INTO command_logs (user_id, command, timestamp, chat_id) 
-            VALUES (?, ?, ?, ?)''', (user_id, command, datetime.now(), chat_id))
-        
-        if update.effective_chat:
-            chat = update.effective_chat
-            c.execute('''INSERT OR REPLACE INTO groups 
-                (chat_id, chat_title, chat_type, last_activity) 
-                VALUES (?, ?, ?, ?)''',
-                (chat.id, chat.title or "Private", chat.type, datetime.now()))
-        
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"⚠️ Track error: {e}")
+init_db()
 
-# /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Helper function to save user
+def save_user(user_id, first_name, username):
+    conn = sqlite3.connect('bot_data.db')
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO users (user_id, first_name, username, last_seen) 
+                 VALUES (?, ?, ?, ?)''', (user_id, first_name, username, datetime.now()))
+    conn.commit()
+    conn.close()
+
+# Start command
+def start(update, context):
     user = update.effective_user
-    chat_id = update.effective_chat.id
-    
-    await track_user_activity(update, user.id, user.username, user.first_name, 
-                             user.last_name, chat_id, "/start")
-    
-    welcome_text = f"""
-🎉 **Welcome to Info Bot** {user.first_name}! 🎉
-
-Main aapki help karne wala bot hoon.
-
-**Available Commands:**
-• /info - Apni information
-• /user @username - User info
-• /group - Group info
-• /ipinfo - IP address info
-• /datetime - Current date/time
-• /random - Random number
-• /password - Generate password
-• /dashboard - Bot statistics
-• /help - All commands
-
-Bot is ready! 🚀
-"""
+    save_user(user.id, user.first_name, user.username)
     
     keyboard = [
-        [InlineKeyboardButton("👤 My Info", callback_data='my_info'),
+        [InlineKeyboardButton("👤 My Info", callback_data='info'),
          InlineKeyboardButton("🤖 Bot Info", callback_data='bot_info')],
-        [InlineKeyboardButton("📊 Dashboard", callback_data='dashboard'),
-         InlineKeyboardButton("❓ Help", callback_data='help_menu')]
+        [InlineKeyboardButton("👑 Admins List", callback_data='admins'),
+         InlineKeyboardButton("🆔 My ID", callback_data='my_id')],
+        [InlineKeyboardButton("❓ Help", callback_data='help')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(
+        f"🎉 Welcome {user.first_name}!\n\n"
+        f"I'm Info Bot. Send /help for all commands.\n\n"
+        f"Click buttons below 👇",
+        reply_markup=reply_markup
+    )
 
-# /info command
-async def my_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user if update.effective_user else update.callback_query.from_user
-    chat_id = update.effective_chat.id if update.effective_chat else user.id
+# Info command - WORKING FIXED
+def info(update, context):
+    user = update.effective_user
+    save_user(user.id, user.first_name, user.username)
     
-    await track_user_activity(update, user.id, user.username, user.first_name, 
-                             user.last_name, chat_id, "/info")
-    
-    info_text = f"""
-👤 **Your Information**
+    text = f"""
+👤 **YOUR INFORMATION**
 
 • Name: {user.first_name} {user.last_name or ''}
-• Username: @{user.username if user.username else 'Not set'}
 • User ID: `{user.id}`
-• Language: {user.language_code or 'Unknown'}
-"""
-    if update.message:
-        await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.callback_query.edit_message_text(info_text, parse_mode=ParseMode.MARKDOWN)
+• Username: @{user.username if user.username else 'Not set'}
+• Language: {user.language_code or 'EN'}
+• Is Premium: {'✅ Yes' if getattr(user, 'is_premium', False) else '❌ No'}
 
-# /user command
-async def user_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+📅 Last seen: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    update.message.reply_text(text, parse_mode='Markdown')
+
+# ID command - WORKING
+def my_id(update, context):
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    text = f"""
+🆔 **ID INFORMATION**
+
+• Your ID: `{user.id}`
+• Chat ID: `{chat.id}`
+• Chat Type: {chat.type}
+"""
+    update.message.reply_text(text, parse_mode='Markdown')
+
+# Admins command - MENTIONS ALL ADMINS
+def admins(update, context):
+    chat = update.effective_chat
+    
+    if chat.type not in ['group', 'supergroup']:
+        update.message.reply_text("❌ This command only works in groups!")
+        return
+    
+    try:
+        admins_list = chat.get_administrators()
+        if not admins_list:
+            update.message.reply_text("❌ Cannot fetch admins list!")
+            return
+        
+        text = "👑 **GROUP ADMINS** 👑\n\n"
+        
+        for admin in admins_list:
+            user = admin.user
+            mention = f"[{user.first_name}](tg://user?id={user.id})"
+            text += f"• {mention}"
+            if user.username:
+                text += f" (@{user.username})"
+            text += f"\n   └ Status: {admin.status}\n\n"
+        
+        # Save admins to database
+        conn = sqlite3.connect('bot_data.db')
+        c = conn.cursor()
+        for admin in admins_list:
+            c.execute('''INSERT OR REPLACE INTO group_admins (group_id, admin_id) 
+                         VALUES (?, ?)''', (chat.id, admin.user.id))
+        conn.commit()
+        conn.close()
+        
+        update.message.reply_text(text, parse_mode='Markdown', disable_web_page_preview=True)
+        
+    except Exception as e:
+        update.message.reply_text(f"❌ Error: {str(e)}")
+
+# User info command - WORKS WITH MENTION
+def user_info(update, context):
     if not context.args:
-        await update.message.reply_text("❌ Please provide a username!\nExample: `/user @username`", parse_mode=ParseMode.MARKDOWN)
+        update.message.reply_text("❌ Usage: `/user @username`", parse_mode='Markdown')
         return
     
     username = context.args[0].replace('@', '')
     
     try:
-        user = await context.bot.get_chat(f"@{username}")
-        info_text = f"""
-👤 **User Information:** @{username}
+        user = context.bot.get_chat(f"@{username}")
+        text = f"""
+👤 **USER INFORMATION**
 
 • Name: {user.first_name} {user.last_name or ''}
 • User ID: `{user.id}`
-• Username: @{user.username if user.username else 'Not set'}
+• Username: @{user.username if user.username else 'None'}
 • Type: {user.type}
+• Link: [Click here](tg://user?id={user.id})
 """
-        await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        await update.message.reply_text(f"❌ User not found!")
+        update.message.reply_text(text, parse_mode='Markdown')
+    except:
+        update.message.reply_text(f"❌ User @{username} not found!")
 
-# /group command
-async def group_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Group info command
+def group_info(update, context):
     chat = update.effective_chat
     
     if chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text("❌ This command only works in groups!")
+        update.message.reply_text("❌ This command works only in groups!")
         return
     
     try:
-        member_count = await chat.get_member_count()
-        info_text = f"""
-📊 **Group Information**
+        member_count = chat.get_member_count()
+        admins = chat.get_administrators()
+        
+        text = f"""
+📊 **GROUP INFORMATION**
 
 • Name: {chat.title}
 • Group ID: `{chat.id}`
 • Type: {chat.type}
 • Members: {member_count}
+• Admins: {len(admins)}
 """
-        await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+        update.message.reply_text(text, parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        update.message.reply_text(f"❌ Error: {str(e)}")
 
-# /ipinfo command
-async def ip_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
+# Bot info
+def bot_info(update, context):
+    bot = context.bot.get_me()
+    text = f"""
+🤖 **BOT INFORMATION**
+
+• Name: {bot.first_name}
+• Username: @{bot.username}
+• Bot ID: `{bot.id}`
+• Status: 🟢 Online
+• Commands: 15+
+"""
+    update.message.reply_text(text, parse_mode='Markdown')
+
+# Ping command
+def ping(update, context):
+    import time
+    start = time.time()
+    msg = update.message.reply_text("🏓 Pinging...")
+    end = time.time()
+    ms = (end - start) * 1000
+    msg.edit_text(f"🏓 **Pong!**\n\nResponse Time: `{ms:.2f}ms`\nStatus: 🟢 Active", parse_mode='Markdown')
+
+# Random number
+def random_num(update, context):
+    if len(context.args) == 2:
+        try:
+            min_val = int(context.args[0])
+            max_val = int(context.args[1])
+            num = random.randint(min_val, max_val)
+            update.message.reply_text(f"🎲 **Random Number:** `{num}`\nRange: {min_val} - {max_val}", parse_mode='Markdown')
+        except:
+            update.message.reply_text("❌ Use: `/random 1 100`", parse_mode='Markdown')
+    else:
+        num = random.randint(1, 100)
+        update.message.reply_text(f"🎲 **Random Number:** `{num}`\nRange: 1 - 100", parse_mode='Markdown')
+
+# Password generator
+def password(update, context):
+    length = 12
+    if context.args and context.args[0].isdigit():
+        length = min(int(context.args[0]), 32)
     
-    await track_user_activity(update, user.id, user.username, user.first_name, 
-                             user.last_name, chat_id, "/ipinfo")
+    chars = string.ascii_letters + string.digits + "!@#$%^&*"
+    pwd = ''.join(random.choice(chars) for _ in range(length))
     
+    # Ensure at least one of each
+    if not any(c.isupper() for c in pwd):
+        pwd = pwd[:-1] + random.choice(string.ascii_uppercase)
+    if not any(c.islower() for c in pwd):
+        pwd = pwd[:-1] + random.choice(string.ascii_lowercase)
+    if not any(c.isdigit() for c in pwd):
+        pwd = pwd[:-1] + random.choice(string.digits)
+    
+    update.message.reply_text(f"🔐 **Generated Password** ({length} chars):\n`{pwd}`\n\n⚠️ Copy it now!", parse_mode='Markdown')
+
+# DateTime
+def datetime_cmd(update, context):
+    now = datetime.now()
+    text = f"""
+📅 **DATE & TIME**
+
+• Date: `{now.strftime('%A, %B %d, %Y')}`
+• Time: `{now.strftime('%H:%M:%S')}`
+• Timezone: `Asia/Kolkata`
+• Timestamp: `{int(now.timestamp())}`
+"""
+    update.message.reply_text(text, parse_mode='Markdown')
+
+# IP Info
+def ipinfo(update, context):
     ip = context.args[0] if context.args else None
     
     if not ip:
         try:
-            response = requests.get('https://api.ipify.org?format=json', timeout=5)
-            ip = response.json()['ip']
-            await update.message.reply_text(f"🌐 Getting info for your IP: `{ip}`", parse_mode=ParseMode.MARKDOWN)
+            r = requests.get('https://api.ipify.org?format=json', timeout=5)
+            ip = r.json()['ip']
+            update.message.reply_text(f"🌐 Fetching info for: `{ip}`", parse_mode='Markdown')
         except:
-            await update.message.reply_text("❌ Please provide an IP address!\nExample: `/ipinfo 8.8.8.8`", parse_mode=ParseMode.MARKDOWN)
+            update.message.reply_text("❌ Usage: `/ipinfo 8.8.8.8`", parse_mode='Markdown')
             return
     
     try:
-        response = requests.get(f'http://ip-api.com/json/{ip}', timeout=5)
-        data = response.json()
+        r = requests.get(f'http://ip-api.com/json/{ip}', timeout=5)
+        data = r.json()
         
         if data['status'] == 'success':
-            info_text = f"""
-🌐 **IP Information:** `{ip}`
+            text = f"""
+🌐 **IP INFORMATION:** `{ip}`
 
 📍 **Location:**
 • Country: {data['country']} ({data['countryCode']})
 • Region: {data['regionName']}
 • City: {data['city']}
+• ZIP: {data['zip']}
+
+🏢 **Network:**
 • ISP: {data['isp']}
+• Organization: {data['org']}
+• Timezone: {data['timezone']}
 """
-            await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+            update.message.reply_text(text, parse_mode='Markdown')
         else:
-            await update.message.reply_text(f"❌ Invalid IP address!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
-# /datetime command
-async def date_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
-    
-    info_text = f"""
-📅 **Date & Time**
-
-• Date: `{now.strftime('%A, %B %d, %Y')}`
-• Time: `{now.strftime('%H:%M:%S')}`
-• Timezone: `{time.tzname[0]}`
-• Timestamp: `{int(now.timestamp())}`
-"""
-    await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
-
-# /random command
-async def random_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) == 2:
-        try:
-            min_val = int(context.args[0])
-            max_val = int(context.args[1])
-            rand_num = random.randint(min_val, max_val)
-            await update.message.reply_text(f"🎲 **Random Number:** `{rand_num}`", parse_mode=ParseMode.MARKDOWN)
-        except:
-            await update.message.reply_text("❌ Use: `/random 1 100`", parse_mode=ParseMode.MARKDOWN)
-    else:
-        rand_num = random.randint(1, 100)
-        await update.message.reply_text(f"🎲 **Random Number (1-100):** `{rand_num}`", parse_mode=ParseMode.MARKDOWN)
-
-# /password command
-async def generate_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    length = 12
-    if context.args and context.args[0].isdigit():
-        length = min(int(context.args[0]), 32)
-    
-    characters = string.ascii_letters + string.digits + "!@#$%^&*"
-    password = ''.join(random.choice(characters) for _ in range(length))
-    
-    await update.message.reply_text(f"🔐 **Generated Password:**\n`{password}`\n\n⚠️ Copy it now!", parse_mode=ParseMode.MARKDOWN)
-
-# /dashboard command
-async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    
-    try:
-        conn = sqlite3.connect('bot_data.db')
-        c = conn.cursor()
-        
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
-        
-        c.execute("SELECT COUNT(*) FROM command_logs")
-        total_commands = c.fetchone()[0]
-        
-        conn.close()
-        
-        uptime_seconds = int(time.time() - BOT_START_TIME)
-        hours = uptime_seconds // 3600
-        minutes = (uptime_seconds % 3600) // 60
-        
-        dashboard_text = f"""
-📊 **Dashboard**
-
-• Total Users: `{total_users}`
-• Commands: `{total_commands}`
-• Uptime: `{hours}h {minutes}m`
-• Status: 🟢 Online
-"""
-        await update.message.reply_text(dashboard_text, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        await update.message.reply_text(f"📊 **Dashboard**\n\nStatus: 🟢 Online", parse_mode=ParseMode.MARKDOWN)
-
-# /bot command
-async def bot_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_user = await context.bot.get_me()
-    info_text = f"""
-🤖 **Bot Info**
-
-• Name: {bot_user.first_name}
-• Username: @{bot_user.username}
-• Status: 🟢 Online
-• Python: {sys.version.split()[0]}
-"""
-    await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
-
-# /ping command
-async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_time = time.time()
-    message = await update.message.reply_text("🏓 Pinging...")
-    end_time = time.time()
-    response_time = (end_time - start_time) * 1000
-    await message.edit_text(f"🏓 **Pong!**\nResponse: `{response_time:.2f}ms`", parse_mode=ParseMode.MARKDOWN)
-
-# /help command
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-📚 **Commands List**
-
-**User Commands:**
-• /info - Your information
-• /user @username - User info
-• /id - Get IDs
-
-**Group Commands:**
-• /group - Group info
-• /admins - List admins
-
-**Utility Commands:**
-• /ipinfo [ip] - IP address info
-• /datetime - Current date/time
-• /random [min max] - Random number
-• /password [length] - Generate password
-• /dashboard - Bot statistics
-• /bot - Bot info
-• /ping - Check status
-• /help - This menu
-"""
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
-
-# /id command
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat = update.effective_chat
-    await update.message.reply_text(f"🆔 **Your ID:** `{user.id}`\n**Chat ID:** `{chat.id}`", parse_mode=ParseMode.MARKDOWN)
-
-# /admins command
-async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text("❌ Groups only!")
-        return
-    
-    try:
-        admins = await chat.get_administrators()
-        admin_list = "\n".join([f"• {admin.user.first_name}" for admin in admins[:5]])
-        await update.message.reply_text(f"👑 **Admins:**\n{admin_list}", parse_mode=ParseMode.MARKDOWN)
+            update.message.reply_text("❌ Invalid IP address!")
     except:
-        await update.message.reply_text("❌ Cannot fetch admins")
+        update.message.reply_text("❌ Error fetching IP info!")
 
-# Callback handler
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Help command - COMPLETE LIST
+def help_command(update, context):
+    text = """
+📚 **COMPLETE COMMANDS LIST**
+
+**📊 Basic Commands:**
+• `/start` - Start the bot
+• `/help` - Show this help
+• `/ping` - Check bot status
+
+**👤 User Commands:**
+• `/info` - Your information
+• `/user @username` - Get user info
+• `/id` - Get your ID
+• `/admins` - Mention all group admins
+
+**👥 Group Commands:**
+• `/group` - Group information
+• `/admins` - List & mention admins
+
+**🔧 Utility Commands:**
+• `/random [min max]` - Generate random number
+• `/password [length]` - Generate strong password
+• `/datetime` - Current date & time
+• `/ipinfo [ip]` - IP address details
+• `/bot` - Bot information
+
+**💡 Tips:**
+• Use `/admins` in groups - it will mention all admins
+• For random number: `/random 1 100`
+• For password: `/password 16`
+• For IP info: `/ipinfo 8.8.8.8`
+
+*Bot is fully functional! 🚀*
+"""
+    update.message.reply_text(text, parse_mode='Markdown')
+
+# Button callbacks
+def button_click(update, context):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
-    if query.data == 'my_info':
-        await my_info(update, context)
+    if query.data == 'info':
+        user = query.from_user
+        text = f"👤 **Your Info**\n\nName: {user.first_name}\nID: `{user.id}`\nUsername: @{user.username if user.username else 'None'}"
+        query.edit_message_text(text, parse_mode='Markdown')
+    
     elif query.data == 'bot_info':
-        await bot_info(update, context)
-    elif query.data == 'dashboard':
-        await dashboard(update, context)
-    elif query.data == 'help_menu':
-        await help_command(update, context)
-
-# Set commands for menu
-async def set_commands(application):
-    commands = [
-        BotCommand("start", "Start the bot"),
-        BotCommand("info", "Your information"),
-        BotCommand("user", "Get user info"),
-        BotCommand("group", "Group information"),
-        BotCommand("ipinfo", "Get IP information"),
-        BotCommand("datetime", "Current date & time"),
-        BotCommand("random", "Generate random number"),
-        BotCommand("password", "Generate password"),
-        BotCommand("dashboard", "Bot statistics"),
-        BotCommand("ping", "Check bot status"),
-        BotCommand("help", "Show all commands")
-    ]
-    await application.bot.set_my_commands(commands)
-
-# Error handler
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"Update {update} caused error {context.error}")
+        bot = context.bot.get_me()
+        text = f"🤖 **Bot Info**\n\nName: {bot.first_name}\nUsername: @{bot.username}\nID: `{bot.id}`"
+        query.edit_message_text(text, parse_mode='Markdown')
+    
+    elif query.data == 'admins':
+        # Get chat admins
+        chat = query.message.chat
+        if chat.type in ['group', 'supergroup']:
+            try:
+                admins_list = chat.get_administrators()
+                text = "👑 **Admins:**\n\n"
+                for admin in admins_list:
+                    user = admin.user
+                    mention = f"[{user.first_name}](tg://user?id={user.id})"
+                    text += f"• {mention}\n"
+                query.edit_message_text(text, parse_mode='Markdown', disable_web_page_preview=True)
+            except:
+                query.edit_message_text("❌ Cannot fetch admins!")
+        else:
+            query.edit_message_text("❌ This works only in groups!")
+    
+    elif query.data == 'my_id':
+        user = query.from_user
+        text = f"🆔 **Your ID:** `{user.id}`"
+        query.edit_message_text(text, parse_mode='Markdown')
+    
+    elif query.data == 'help':
+        text = "/info - Your info\n/user - User info\n/id - Your ID\n/admins - List admins\n/group - Group info\n/random - Random number\n/password - Password\n/datetime - Time\n/ipinfo - IP info\n/ping - Status"
+        query.edit_message_text(text)
 
 # Main function
 def main():
     print("🤖 Starting Info Bot...")
-    print(f"Python version: {sys.version}")
+    print(f"Port: {PORT}")
     
-    # Initialize database
-    init_database()
+    # Create updater
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
     
-    # Create application
-    application = Application.builder().token(TOKEN).build()
+    # Add command handlers
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("info", info))
+    dp.add_handler(CommandHandler("user", user_info))
+    dp.add_handler(CommandHandler("id", my_id))
+    dp.add_handler(CommandHandler("admins", admins))
+    dp.add_handler(CommandHandler("group", group_info))
+    dp.add_handler(CommandHandler("bot", bot_info))
+    dp.add_handler(CommandHandler("ping", ping))
+    dp.add_handler(CommandHandler("random", random_num))
+    dp.add_handler(CommandHandler("password", password))
+    dp.add_handler(CommandHandler("datetime", datetime_cmd))
+    dp.add_handler(CommandHandler("ipinfo", ipinfo))
+    dp.add_handler(CallbackQueryHandler(button_click))
     
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("info", my_info))
-    application.add_handler(CommandHandler("user", user_info))
-    application.add_handler(CommandHandler("group", group_info))
-    application.add_handler(CommandHandler("ipinfo", ip_info))
-    application.add_handler(CommandHandler("datetime", date_time))
-    application.add_handler(CommandHandler("random", random_number))
-    application.add_handler(CommandHandler("password", generate_password))
-    application.add_handler(CommandHandler("dashboard", dashboard))
-    application.add_handler(CommandHandler("bot", bot_info))
-    application.add_handler(CommandHandler("ping", ping_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("id", get_id))
-    application.add_handler(CommandHandler("admins", list_admins))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_error_handler(error_handler)
-    
-    # Set commands
-    application.post_init = set_commands
-    
+    # Start bot with polling (no webhook needed)
     print("✅ Bot is ready!")
     print("🚀 Starting polling...")
-    
-    # Start bot with polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == '__main__':
     main()
