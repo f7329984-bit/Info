@@ -17,74 +17,80 @@ from telegram.constants import ParseMode
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # Bot token - Environment variable se le rahe hain
-TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+TOKEN = os.environ.get("BOT_TOKEN", "")
+
+# Check if token is set
+if not TOKEN:
+    print("❌ ERROR: BOT_TOKEN environment variable not set!")
+    print("Please set your bot token in Render environment variables")
+    sys.exit(1)
 
 # Bot start time
 BOT_START_TIME = time.time()
 
 # Database setup
 def init_database():
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        last_name TEXT,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
-        commands_used INTEGER DEFAULT 0
-    )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS groups (
-        chat_id INTEGER PRIMARY KEY,
-        chat_title TEXT,
-        chat_type TEXT,
-        first_seen TIMESTAMP,
-        last_activity TIMESTAMP
-    )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS command_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        command TEXT,
-        timestamp TIMESTAMP,
-        chat_id INTEGER
-    )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        note TEXT,
-        created_at TIMESTAMP
-    )''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        c = conn.cursor()
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            first_seen TIMESTAMP,
+            last_seen TIMESTAMP,
+            commands_used INTEGER DEFAULT 0
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS groups (
+            chat_id INTEGER PRIMARY KEY,
+            chat_title TEXT,
+            chat_type TEXT,
+            first_seen TIMESTAMP,
+            last_activity TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS command_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            command TEXT,
+            timestamp TIMESTAMP,
+            chat_id INTEGER
+        )''')
+        
+        conn.commit()
+        conn.close()
+        print("✅ Database initialized successfully")
+    except Exception as e:
+        print(f"⚠️ Database error: {e}")
 
 # Track user activity
 async def track_user_activity(update, user_id, username, first_name, last_name, chat_id, command):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    
-    c.execute('''INSERT OR REPLACE INTO users 
-        (user_id, username, first_name, last_name, last_seen, commands_used) 
-        VALUES (?, ?, ?, ?, ?, COALESCE((SELECT commands_used FROM users WHERE user_id=?), 0) + 1)''',
-        (user_id, username, first_name, last_name, datetime.now(), user_id))
-    
-    c.execute('''INSERT INTO command_logs (user_id, command, timestamp, chat_id) 
-        VALUES (?, ?, ?, ?)''', (user_id, command, datetime.now(), chat_id))
-    
-    if update.effective_chat:
-        chat = update.effective_chat
-        c.execute('''INSERT OR REPLACE INTO groups 
-            (chat_id, chat_title, chat_type, last_activity) 
-            VALUES (?, ?, ?, ?)''',
-            (chat.id, chat.title or "Private", chat.type, datetime.now()))
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        c = conn.cursor()
+        
+        c.execute('''INSERT OR REPLACE INTO users 
+            (user_id, username, first_name, last_name, last_seen, commands_used) 
+            VALUES (?, ?, ?, ?, ?, COALESCE((SELECT commands_used FROM users WHERE user_id=?), 0) + 1)''',
+            (user_id, username or '', first_name or '', last_name or '', datetime.now(), user_id))
+        
+        c.execute('''INSERT INTO command_logs (user_id, command, timestamp, chat_id) 
+            VALUES (?, ?, ?, ?)''', (user_id, command, datetime.now(), chat_id))
+        
+        if update.effective_chat:
+            chat = update.effective_chat
+            c.execute('''INSERT OR REPLACE INTO groups 
+                (chat_id, chat_title, chat_type, last_activity) 
+                VALUES (?, ?, ?, ?)''',
+                (chat.id, chat.title or "Private", chat.type, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Track error: {e}")
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,22 +276,23 @@ async def generate_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM command_logs")
-    total_commands = c.fetchone()[0]
-    
-    conn.close()
-    
-    uptime_seconds = int(time.time() - BOT_START_TIME)
-    hours = uptime_seconds // 3600
-    minutes = (uptime_seconds % 3600) // 60
-    
-    dashboard_text = f"""
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        c = conn.cursor()
+        
+        c.execute("SELECT COUNT(*) FROM users")
+        total_users = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM command_logs")
+        total_commands = c.fetchone()[0]
+        
+        conn.close()
+        
+        uptime_seconds = int(time.time() - BOT_START_TIME)
+        hours = uptime_seconds // 3600
+        minutes = (uptime_seconds % 3600) // 60
+        
+        dashboard_text = f"""
 📊 **Dashboard**
 
 • Total Users: `{total_users}`
@@ -293,7 +300,9 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Uptime: `{hours}h {minutes}m`
 • Status: 🟢 Online
 """
-    await update.message.reply_text(dashboard_text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(dashboard_text, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        await update.message.reply_text(f"📊 **Dashboard**\n\nStatus: 🟢 Online", parse_mode=ParseMode.MARKDOWN)
 
 # /bot command
 async def bot_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,6 +313,7 @@ async def bot_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Name: {bot_user.first_name}
 • Username: @{bot_user.username}
 • Status: 🟢 Online
+• Python: {sys.version.split()[0]}
 """
     await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -392,10 +402,19 @@ async def set_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
+# Error handler
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"Update {update} caused error {context.error}")
+
 # Main function
 def main():
+    print("🤖 Starting Info Bot...")
+    print(f"Python version: {sys.version}")
+    
+    # Initialize database
     init_database()
     
+    # Create application
     application = Application.builder().token(TOKEN).build()
     
     # Add handlers
@@ -414,22 +433,16 @@ def main():
     application.add_handler(CommandHandler("id", get_id))
     application.add_handler(CommandHandler("admins", list_admins))
     application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_error_handler(error_handler)
     
+    # Set commands
     application.post_init = set_commands
     
-    # Get port for Render
-    port = int(os.environ.get('PORT', 8080))
+    print("✅ Bot is ready!")
+    print("🚀 Starting polling...")
     
-    print(f"🤖 Bot is running on Render...")
-    print(f"✅ Database initialized")
-    print(f"🚀 Bot started at {datetime.now()}")
-    
-    # Start bot with webhook for Render
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
-    )
+    # Start bot with polling
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
