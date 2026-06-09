@@ -3,7 +3,7 @@ services:
     name: telegram-info-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python info_bot.py
+    startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false
