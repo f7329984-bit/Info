@@ -256,10 +256,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print(f"🤖 Starting Info Bot... Port: {PORT}")
     
-    # Create Application (v20+ API)
     app = Application.builder().token(TOKEN).build()
     
-    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("info", info))
@@ -275,20 +273,7 @@ def main():
     app.add_handler(CommandHandler("ipinfo", ipinfo))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    # Webhook setup
-    render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '')
-    if render_host:
-        webhook_url = f"https://{render_host}/{TOKEN}"
-        print(f"✅ Webhook URL: {webhook_url}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TOKEN,
-            webhook_url=webhook_url
-        )
-    else:
-        print("⚠️  No webhook host, using polling...")
-        app.run_polling()
-
-if __name__ == '__main__':
-    main()
+    # ✅ Sirf polling - koi webhook dependency nahi
+    print("🚀 Bot starting via polling...")
+    print("✅ Bot is running!")
+    app.run_polling()
