@@ -9,3 +9,5 @@ services:
         sync: false
       - key: PORT
         value: 8080
+      -key: PYTHON_VERSION 
+        value: 3.11.4
