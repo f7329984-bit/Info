@@ -258,6 +258,7 @@ def main():
     
     app = Application.builder().token(TOKEN).build()
     
+    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("info", info))
@@ -273,7 +274,11 @@ def main():
     app.add_handler(CommandHandler("ipinfo", ipinfo))
     app.add_handler(CallbackQueryHandler(button_click))
     
-    # ✅ Sirf polling - koi webhook dependency nahi
-    print("🚀 Bot starting via polling...")
-    print("✅ Bot is running!")
+    print("✅ Bot started successfully!")
+    
+    # ✅ IMP: Polling + infinite loop
     app.run_polling()
+    
+    # Yeh kabhi execute nahi hoga but render ke liye safe hai
+    while True:
+        time.sleep(10)
