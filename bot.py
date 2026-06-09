@@ -366,16 +366,16 @@ def button_click(update, context):
         text = "/info - Your info\n/user - User info\n/id - Your ID\n/admins - List admins\n/group - Group info\n/random - Random number\n/password - Password\n/datetime - Time\n/ipinfo - IP info\n/ping - Status"
         query.edit_message_text(text)
 
-# Main function
+# Purane main function ko replace karo isse:
+
 def main():
     print("🤖 Starting Info Bot...")
     print(f"Port: {PORT}")
     
-    # Create updater
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
     
-    # Add command handlers
+    # Add all handlers (same rahenge)
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("info", info))
@@ -391,10 +391,15 @@ def main():
     dp.add_handler(CommandHandler("ipinfo", ipinfo))
     dp.add_handler(CallbackQueryHandler(button_click))
     
-    # Start bot with polling (no webhook needed)
-    print("✅ Bot is ready!")
-    print("🚀 Starting polling...")
-    updater.start_polling()
+    # Start webhook instead of polling (for Render)
+    updater.start_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/{TOKEN}"
+    )
+    
+    print("✅ Bot is ready on webhook mode!")
     updater.idle()
 
 if __name__ == '__main__':
